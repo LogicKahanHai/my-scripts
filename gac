@@ -36,6 +36,11 @@ gum_border_msg() {
     fi
 }
 
+git_push() {
+    git push
+}
+
+
 clear
 gum_border_msg "Welcome to the Git Commit Manager"
 
@@ -94,7 +99,12 @@ DESCRIPTION=$(gum write --placeholder "Details of this change")
 gum_border_msg "$(gum format -- '## Commit Message' )" "$(gum format -- "- **Type:** $TYPE$SCOPE" "- **Summary:** $SUMMARY" "- **Description:** $DESCRIPTION")"
 
 # Commit these changes if user confirms
-gum confirm "Commit changes?" && git commit -m "$SUMMARY" -m "$DESCRIPTION" && gum style --foreground "#04B575" "Changes committed" && exit 0
+gum confirm "Commit changes?" && git commit -m "$SUMMARY" -m "$DESCRIPTION" && gum style --foreground "#04B575" "Changes committed" && committed=true && gum confirm "Push changes?" && git_push && gum style --foreground "#04B575" "Changes pushed" && exit 0
+
+if [ "$committed" = true ]; then
+    gum style --foreground "#F4AC45" "Changes not pushed"
+    exit 0
+fi
 
 # If user does not confirm, unstage the files
 unstage_files "${selected_files[@]}" && gum style --foreground "#F4AC45" "Changes not committed" && exit 0
