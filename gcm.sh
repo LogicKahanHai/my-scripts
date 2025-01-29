@@ -4,7 +4,82 @@
 #     gum confirm "Stage all?" && git add .
 # fi
 
+# git status -s -- will give the output in the format of "XY file" where X is the status of the file in the index and Y is the status of the file in the working directory. The possible status are:
+# M - modified
+# A - added
+# D - deleted
+# R - renamed
+# C - copied
+# U - updated but unmerged
+# ? - untracked
+# ! - ignored
+
+# A function to stage the list of files that are passed to it
+stage_files() {
+    git add "$@"
+}
+
+# A function to unstage the list of files that are passed to it
+unstage_files() {
+    git restore --staged "$@"
+}
+
+gum_style_msg() {
+    gum style --foreground "#F4AC45" --margin "1" --padding "2" "$1"
+}
+
+gum_border_msg() {
+    if [ -z "$2" ]; then
+        gum style --foreground 212 --border-foreground 212 --border normal --width 50 --align center --margin "1 2" --padding "2 4" "$1"
+    else
+        gum style --foreground 212 --border-foreground 212 --border normal --width 50 --margin "1 2" --padding "2 4" "$1" "$2"
+    fi
+}
+
+gum_border_msg "Welcome to the Git Commit Manager"
+
+unstaged_files=($(git status -s -u | grep -e '^.[MTADRCU]' -e '^??' | awk '{print $2}'))
+
+# If there are no files to commit, exit
+if [ ${#unstaged_files[@]} -eq 0 ]; then
+    gum_style_msg "No files to commit"
+    exit 1
+fi
+
+# If there are files to commit, ask to stage them
+selected_files=($(gum choose --no-limit --cursor.foreground "#F4AC45" --header.foreground "#04B575" --output-delimiter " " --selected-prefix "[✓]" --unselected-prefix "[ ]" --cursor-prefix "[➜]"  --header "Select the files you want to stage" ${unstaged_files[@]}))
+
+# If selected_files are more than 0, Add the selected files to the staging area
+if [ ${#selected_files[@]} -gt 0 ]; then
+    gum_style_msg $(gum spin --spinner globe --title "Staging files..." -- sleep 2.5)
+    stage_files "${selected_files[@]}"
+fi
+
+
+staged_files=($(git status -s | grep '^[MTADRCU]' | awk '{print $2}'))
+
+# If there are no files to commit, exit
+if [ ${#staged_files[@]} -eq 0 ]; then
+    gum_style_msg "No files to commit"
+    exit 1
+fi
+
+# Create a markdown list of the files that are staged
+staged_files_list=$(printf "* %s\n" "${staged_files[@]}")
+
+# Finally show all the files that are staged
+gum_border_msg 'Staged Files' "$(gum format -- "$staged_files_list")"
+
+
+
 TYPE=$(gum choose "fix" "feat" "docs" "style" "refactor" "test" "chore" "revert")
+
+# If type is not selected, exit
+test -z "$TYPE" && gum style --foreground "#F4AC45" --margin "1 2" --padding "2 4" "No type selected" \
+    && gum spin --spinner moon --title "Unstaging files..." -- sleep 2.5 \
+    && unstage_files "${selected_files[@]}" \
+    && exit 1
+
 SCOPE=$(gum input --placeholder "scope")
 
 # Since the scope is optional, wrap it in parentheses if it has a value.
@@ -14,5 +89,14 @@ test -n "$SCOPE" && SCOPE="($SCOPE)"
 SUMMARY=$(gum input --value "$TYPE$SCOPE: " --placeholder "Summary of this change")
 DESCRIPTION=$(gum write --placeholder "Details of this change")
 
+# show the commit message
+gum style \
+    --foreground 212 --border-foreground 212 --border double \
+    --align center --width 50 --margin "1 2" --padding "2 4" \
+ 'Commit Message' "$(gum format -- "* **Type:** $TYPE$SCOPE\n* **Summary:** $SUMMARY\n* **Description:** $DESCRIPTION")"
+
 # Commit these changes if user confirms
-gum confirm "Commit changes?" && git commit -m "$SUMMARY" -m "$DESCRIPTION"
+gum confirm "Commit changes?" && git commit -m "$SUMMARY" -m "$DESCRIPTION" && gum style --foreground "#04B575" "Changes committed" && exit 0
+
+# If user does not confirm, unstage the files
+unstage_files "${selected_files[@]}" && gum style --foreground "#F4AC45" "Changes not committed" && exit 0
