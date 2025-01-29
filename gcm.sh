@@ -36,6 +36,7 @@ gum_border_msg() {
     fi
 }
 
+clear
 gum_border_msg "Welcome to the Git Commit Manager"
 
 unstaged_files=($(git status -s -u | grep -e '^.[MTADRCU]' -e '^??' | awk '{print $2}'))
@@ -90,10 +91,7 @@ SUMMARY=$(gum input --value "$TYPE$SCOPE: " --placeholder "Summary of this chang
 DESCRIPTION=$(gum write --placeholder "Details of this change")
 
 # show the commit message
-gum style \
-    --foreground 212 --border-foreground 212 --border double \
-    --align center --width 50 --margin "1 2" --padding "2 4" \
- 'Commit Message' "$(gum format -- "* **Type:** $TYPE$SCOPE\n* **Summary:** $SUMMARY\n* **Description:** $DESCRIPTION")"
+gum_border_msg "$(gum format -- '## Commit Message' )" "$(gum format -- "- **Type:** $TYPE$SCOPE" "- **Summary:** $SUMMARY" "- **Description:** $DESCRIPTION")"
 
 # Commit these changes if user confirms
 gum confirm "Commit changes?" && git commit -m "$SUMMARY" -m "$DESCRIPTION" && gum style --foreground "#04B575" "Changes committed" && exit 0
