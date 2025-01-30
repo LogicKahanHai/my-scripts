@@ -12,6 +12,9 @@
 # }
 #
 
+main_horizontal_two_terminal="208b,151x44,0,0[151x29,0,0,1,151x14,0,30{75x14,0,30,4,75x14,76,30,7}]"
+
+
 gum_border_msg() {
     gum style --foreground 212 --border-foreground 212 --border double --width 50 --margin "1 2" --padding "2 4" "$1"
 }
@@ -19,6 +22,29 @@ gum_border_msg() {
 show_header() {
     gum_border_msg "Welcome to the tmuxinator session creator"
 }
+
+gum_style() {
+    gum style --foreground "#04B575" "$1"
+}
+
+# Strip the last file name to get the directory
+strip_file() {
+    echo $(dirname $1)
+}
+
+gum_choose_no_limit() {
+    list=${@:2}
+    header=$1
+    gum choose --no-limit --cursor.foreground "#F4AC45" --header.foreground "#04B575" --output-delimiter " "  --header "$header" $list
+}
+
+gum_choose_limit() {
+    list=${@:3}
+    header=$1
+    limit=$2
+    gum choose --limit $limit --cursor.foreground "#F4AC45" --header.foreground "#04B575" --output-delimiter " "  --header "$header" $list
+}
+
 
 show_header
 
@@ -39,7 +65,7 @@ clear
 show_header
 
 # Get the name of the session
-gum style --foreground "#04B575" "Enter the name of the tmux session"
+gum_style "Enter the name of the tmux session"
 filename=$(gum input --cursor.foreground "#F4AC45" --prompt.foreground "#04B575" --placeholder "$(basename $cwd)")
 
 # Check if the user entered a name
@@ -56,6 +82,9 @@ if [ -z "$filename" ]; then
     fi
 fi
 
+clear
+show_header
+
 MUX_DIR=~/dotfiles/.config/tmuxinator
 cd $MUX_DIR
 
@@ -71,11 +100,13 @@ fi
 #list of all the hooks available
 
 hooks=( "on_project_start" "on_project_first_start" "on_project_restart" "on_project_exit" "on_project_stop" "pre_window" "startup_window" "startup_pane" )
+layouts=( "main-horizontal" "main-vertical" "tiled" "even-horizontal" "even-vertical" "main-horizontal-two-terminal" )
 
 # Select the hooks you want to use
-selected_hooks=$(gum choose --no-limit --cursor.foreground "#F4AC45" --header.foreground "#04B575" --output-delimiter " "  --header "Select the hooks you want to use" ${hooks[@]})
+selected_hooks=$(gum_choose_no_limit "Select the hooks you want to use" ${hooks[@]})
 
-gum spin --title "Creating file $(gum style --foreground "#04B575" "$MUX_DIR/$filename.yml")..." -- sleep 2.5
+
+gum spin --title "Creating file $(gum_style "$MUX_DIR/$filename.yml")..." -- sleep 2.5
 
 clear
 show_header
@@ -116,7 +147,7 @@ if [ -n "$selected_hooks" ]; then
             unset exit_hook_command
         fi
 
-        gum style --foreground "#04B575" "Enter the command for the $hook hook"
+        gum_style "Enter the command for the $hook hook"
         if [ -z "$exit_hook_command" ]; then
             hook_command=$(gum input --cursor.foreground "#F4AC45" --prompt.foreground "#04B575" --placeholder "$hook")
         else
@@ -140,30 +171,113 @@ clear;
 show_header
 
 # Add the windows to the session file
-gum style --foreground "#04B575" "Enter the number of windows you want to create"
+gum_style "Enter the number of windows you want to create"
 windows=$(gum choose {1..9})
 
 echo "windows:" >> "$filename.yml"
 for ((i = 1; i <= $windows; i++)); do
-    gum style --foreground "#04B575" "Enter the name for window $i"
+    clear;
+    show_header
+
+    # Add the name for window $i
+    gum_style "Enter the name for window $i"
     window_name=$(gum input --cursor.foreground "#F4AC45" --prompt.foreground "#04B575" --placeholder "editor, server, etc.")
     clear;
     show_header
-    gum style --foreground "#04B575" "Enter the layout for window $i"
-    window_layout=$(gum input --cursor.foreground "#F4AC45" --prompt.foreground "#04B575" --placeholder "main-horizontal" --value "main-horizontal")
-    clear;
-    show_header
-    gum style --foreground "#04B575" "Enter the number of panes in window $i"
-    window_panes=$(gum choose {1..4})
+
+    # Add the root for window $i
+    new_root=true
+    root_was_file=false
+    gum confirm --prompt.foreground "#04B575" "Do you want to set the root for $window_name?" || new_root=false
+    if [ "$new_root" = false ]; then
+        window_root=""
+    else
+        gum_style "Enter the root for $window_name"
+        window_root=$(gum file $cwd --cursor.foreground "#F4AC45" --no-permissions --directory --height 15)
+
+        if [ -n "$window_root" ]; then
+            if [ -f "$window_root" ]; then
+                root_was_file=true
+                # strip the last file name to get the directory
+                window_root=$(strip_file $window_root)
+
+            fi
+        fi
+    fi
     clear;
     show_header
 
-    echo "  - $window_name:" >> "$filename.yml"
-    echo "      layout: $window_layout" >> "$filename.yml"
+    # Add the layout for window $i
+    window_layout=$(gum_choose_limit "Select the layout for $window_name" 1 ${layouts[@]})
+    if [ -z "$window_layout" ]; then
+        clear;
+        show_header
+        gum_style "Please select a layout for $window_name"
+        window_layout=$(gum_choose_limit "Select the layout for $window_name" 1 ${layouts[@]})
+        if [ -z "$window_layout" ]; then
+            clear;
+            show_header
+            gum_style "Come back when you have a layout for $window_name..."
+            exit 1
+        fi
+    fi
+    clear;
+    show_header
+
+    # Window panes will be based on the layout, switch case
+    case $window_layout in
+        "main-horizontal")
+            window_panes=2
+            ;;
+        "main-vertical")
+            window_panes=2
+            ;;
+        "tiled")
+            window_panes=4
+            ;;
+        "even-horizontal")
+            window_panes=2
+            ;;
+        "even-vertical")
+            window_panes=2
+            ;;
+        "main-horizontal-two-terminal")
+            window_panes=3
+            ;;
+    esac
+
+
+    # window entry
+    if [ -z "$window_root" ]; then
+        echo "  - $window_name:" >> "$filename.yml"
+    else
+        echo "  - $window_name:" >> "$filename.yml"
+        if [ "$root_was_file" = true ]; then
+            echo "      # The root cannot be a file, so it was stripped down to the nearest directory." >> "$filename.yml"
+            echo "      root: $window_root" >> "$filename.yml"
+        else
+            echo "      root: $window_root" >> "$filename.yml"
+        fi
+    fi
+
+    # pre_window entry
+    echo "      #pre_window: clear" >> "$filename.yml"
+
+    # window layout entry
+    if [ -z "$window_layout" ]; then
+        echo "      #layout: main-vertical" >> "$filename.yml"
+    else
+        if [ "$window_layout" = "main-horizontal-two-terminal" ]; then
+            echo "      layout: $main_horizontal_two_terminal" >> "$filename.yml"
+        else
+            echo "      layout: $window_layout" >> "$filename.yml"
+        fi
+    fi
+
     echo "      panes:" >> "$filename.yml"
 
     for ((j = 1; j <= $window_panes; j++)); do
-        gum style --foreground "#04B575" "Enter the command for pane $j in window $i"
+        gum_style "Enter the command for pane $j in $window_name"
         pane_command=$(gum input --cursor.foreground "#F4AC45" --prompt.foreground "#04B575" --placeholder "nvim, clear, etc.")
         clear;
         show_header
@@ -174,7 +288,7 @@ done
 # Add all the hooks to the session file as comments that are not used
 echo "# Hooks" >> "$filename.yml"
 for hook in "${hooks[@]}"; do
-    if [[ ! " ${selected_hooks[@]} " =~ " ${hook} " ]]; then
+    if [[ ! " ${selected_hook[@]} " =~ " ${hook} " ]]; then
         echo "# $hook:" >> "$filename.yml"
     fi
 done
@@ -185,7 +299,7 @@ show_header
 # Open the session file for further edits
 gum confirm --prompt.foreground "#04B575" "Do you want to open the file for further edits?" || exit 0
 
-gum spin --title "Opening file $(gum style --foreground "#04B575" "$MUX_DIR/$filename.yml") for further edits..." -- sleep 1.5
+gum spin --title "Opening file $(gum_style "$MUX_DIR/$filename.yml") for further edits..." -- sleep 1.5
 clear
 
 # Open the session file
