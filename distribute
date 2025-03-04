@@ -28,7 +28,7 @@ confirm_project_root() {
   fi
 }
 
-# Function to prompt for other configuration details
+# Function to prompt for configuration details
 prompt_for_config() {
   # Check if the configuration file exists
   if [ -f $CONFIG_FILE ]; then
@@ -37,6 +37,7 @@ prompt_for_config() {
     username=$(jq -r '.username // empty' $CONFIG_FILE)
     destination=$(jq -r '.destination // empty' $CONFIG_FILE)
     build_command=$(jq -r '.build_command // empty' $CONFIG_FILE)
+    build_output=$(jq -r '.build_output // empty' $CONFIG_FILE)
   fi
 
   # Prompt for missing configuration details
@@ -44,13 +45,15 @@ prompt_for_config() {
   [[ -z "$username" ]] && username=$(gum input --placeholder "Enter SSH username:")
   [[ -z "$destination" ]] && destination=$(gum input --placeholder "Enter destination folder on Raspberry Pi:")
   [[ -z "$build_command" ]] && build_command=$(gum input --placeholder "Enter the build command:")
+  [[ -z "$build_output" ]] && build_output=$(gum input --placeholder "Enter the build output directory (relative to the project root $local_root):")
 
   # Save configuration to JSON file
   jq --arg hostname "$hostname" \
      --arg username "$username" \
      --arg destination "$destination" \
      --arg build_command "$build_command" \
-     '.hostname = $hostname | .username = $username | .destination = $destination | .build_command = $build_command' \
+     --arg build_output "$build_output" \
+     '.hostname = $hostname | .username = $username | .destination = $destination | .build_command = $build_command | .build_output = $build_output' \
      "$CONFIG_FILE" > tmp.$$.json && mv tmp.$$.json "$CONFIG_FILE"
 }
 
@@ -61,6 +64,7 @@ load_config() {
     username=$(jq -r '.username' $CONFIG_FILE)
     destination=$(jq -r '.destination' $CONFIG_FILE)
     build_command=$(jq -r '.build_command' $CONFIG_FILE)
+    build_output=$(jq -r '.build_output' $CONFIG_FILE)
     local_root=$(jq -r '.local_root' $CONFIG_FILE)
   else
     prompt_for_config
@@ -99,7 +103,7 @@ deploy_build() {
   fi
 
   # Proceed with rsync to deploy the build output
-  rsync -avz --delete "$local_root/dist/" "$username@$hostname:$destination"
+  rsync -avz --delete "$local_root/$build_output/" "$username@$hostname:$destination"
   if [ $? -eq 0 ]; then
     display_message "Deployment successful."
   else
