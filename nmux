@@ -100,7 +100,7 @@ fi
 #list of all the hooks available
 
 hooks=( "on_project_start" "on_project_first_start" "on_project_restart" "on_project_exit" "on_project_stop" "pre_window" "startup_window" "startup_pane" )
-layouts=( "main-horizontal" "main-vertical" "tiled" "even-horizontal" "even-vertical" "main-horizontal-two-terminal" )
+layouts=( "main-horizontal" "main-vertical" "tiled" "even-horizontal" "even-vertical" "main-horizontal-two-terminal" "single-pane" )
 
 # Select the hooks you want to use
 selected_hooks=$(gum_choose_no_limit "Select the hooks you want to use" ${hooks[@]})
@@ -244,6 +244,9 @@ for ((i = 1; i <= $windows; i++)); do
         "main-horizontal-two-terminal")
             window_panes=3
             ;;
+        "single-pane")
+            window_panes=1
+            ;;
     esac
 
 
@@ -264,7 +267,7 @@ for ((i = 1; i <= $windows; i++)); do
     echo "      #pre_window: clear" >> "$filename.yml"
 
     # window layout entry
-    if [ -z "$window_layout" ]; then
+    if [ -z "$window_layout" ] || [ "$window_layout" = "single-pane" ]; then
         echo "      #layout: main-vertical" >> "$filename.yml"
     else
         if [ "$window_layout" = "main-horizontal-two-terminal" ]; then
