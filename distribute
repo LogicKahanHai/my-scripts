@@ -1,0 +1,116 @@
+#!/bin/zsh
+
+CONFIG_FILE="deploy_config.json"
+
+# Function to display a styled message
+display_message() {
+  gum style --border normal --margin "1" --padding "1 2" --border-foreground 212 "$1"
+}
+
+# Function to confirm the project root if 'local_root' is not in config
+confirm_project_root() {
+  if [ -f "$CONFIG_FILE" ]; then
+    local_root=$(jq -r 'if has("local_root") then .local_root else empty end' "$CONFIG_FILE")
+  fi
+
+  if [ -z "$local_root" ]; then
+    if gum confirm "Is this the root of your project?"; then
+      local_root=$(pwd)
+      if [ -f "$CONFIG_FILE" ]; then
+        jq --arg local_root "$local_root" '. + {local_root: $local_root}' "$CONFIG_FILE" > tmp.$$.json && mv tmp.$$.json "$CONFIG_FILE"
+      else
+        echo "{\"local_root\": \"$local_root\"}" > "$CONFIG_FILE"
+      fi
+    else
+      gum style --foreground 9 "Error: Please run this script from the project's root directory."
+      exit 1
+    fi
+  fi
+}
+
+# Function to prompt for other configuration details
+prompt_for_config() {
+  # Check if the configuration file exists
+  if [ -f $CONFIG_FILE ]; then
+    # Load existing configuration
+    hostname=$(jq -r '.hostname // empty' $CONFIG_FILE)
+    username=$(jq -r '.username // empty' $CONFIG_FILE)
+    destination=$(jq -r '.destination // empty' $CONFIG_FILE)
+    build_command=$(jq -r '.build_command // empty' $CONFIG_FILE)
+  fi
+
+  # Prompt for missing configuration details
+  [[ -z "$hostname" ]] && hostname=$(gum input --placeholder "Enter Raspberry Pi hostname:")
+  [[ -z "$username" ]] && username=$(gum input --placeholder "Enter SSH username:")
+  [[ -z "$destination" ]] && destination=$(gum input --placeholder "Enter destination folder on Raspberry Pi:")
+  [[ -z "$build_command" ]] && build_command=$(gum input --placeholder "Enter the build command:")
+
+  # Save configuration to JSON file
+  jq --arg hostname "$hostname" \
+     --arg username "$username" \
+     --arg destination "$destination" \
+     --arg build_command "$build_command" \
+     '.hostname = $hostname | .username = $username | .destination = $destination | .build_command = $build_command' \
+     "$CONFIG_FILE" > tmp.$$.json && mv tmp.$$.json "$CONFIG_FILE"
+}
+
+# Function to load configuration
+load_config() {
+  if [ -f $CONFIG_FILE ]; then
+    hostname=$(jq -r '.hostname' $CONFIG_FILE)
+    username=$(jq -r '.username' $CONFIG_FILE)
+    destination=$(jq -r '.destination' $CONFIG_FILE)
+    build_command=$(jq -r '.build_command' $CONFIG_FILE)
+    local_root=$(jq -r '.local_root' $CONFIG_FILE)
+  else
+    prompt_for_config
+  fi
+}
+
+# Function to execute the build command
+execute_build() {
+  display_message "Executing build command: $build_command"
+  eval $build_command
+  if [ $? -ne 0 ]; then
+    display_message "Build failed. Aborting deployment."
+    exit 1
+  fi
+}
+
+# Function to deploy build output
+deploy_build() {
+  display_message "Deploying build output to $username@$hostname:$destination"
+
+  # Check if the destination directory exists on the remote server
+  if ssh "$username@$hostname" "[ ! -d '$destination' ]"; then
+    # Notify the user and ask if they want to create it
+    if gum confirm "The destination folder '$destination' does not exist on the remote server. Do you want to create it?"; then
+      # Attempt to create the directory
+      if ssh "$username@$hostname" "mkdir -p '$destination'"; then
+        display_message "Successfully created the directory '$destination' on the remote server."
+      else
+        display_message "Failed to create the directory '$destination' on the remote server."
+        exit 1
+      fi
+    else
+      display_message "Deployment aborted by the user."
+      exit 1
+    fi
+  fi
+
+  # Proceed with rsync to deploy the build output
+  rsync -avz --delete "$local_root/dist/" "$username@$hostname:$destination"
+  if [ $? -eq 0 ]; then
+    display_message "Deployment successful."
+  else
+    display_message "Deployment failed."
+    exit 1
+  fi
+}
+
+# Main script execution
+confirm_project_root
+prompt_for_config
+execute_build
+deploy_build
+
