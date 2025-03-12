@@ -2,6 +2,7 @@
 
 CONFIG_FILE="deploy_config.json"
 SSH_TIMEOUT=10  # SSH connection timeout in seconds
+source ~/.zshrc
 
 # Function to display a styled message
 display_message() {
@@ -27,25 +28,6 @@ confirm_project_root() {
       exit 1
     fi
   fi
-}
-
-
-rewrite_config() {
-  # Prompt for configuration details
-  hostname=$(gum input --placeholder "Enter Raspberry Pi hostname:")
-  username=$(gum input --placeholder "Enter SSH username:")
-  destination=$(gum input --placeholder "Enter destination folder on Raspberry Pi:")
-  build_command=$(gum input --placeholder "Enter the build command:")
-  build_output=$(gum input --placeholder "Enter the build output directory:")
-
-  # Save configuration to JSON file
-  jq --arg hostname "$hostname" \
-     --arg username "$username" \
-     --arg destination "$destination" \
-     --arg build_command "$build_command" \
-     --arg build_output "$build_output" \
-     '.hostname = $hostname | .username = $username | .destination = $destination | .build_command = $build_command | .build_output = $build_output' \
-     "$CONFIG_FILE" > tmp.$$.json && mv tmp.$$.json "$CONFIG_FILE"
 }
 
 
@@ -114,12 +96,35 @@ load_config() {
 # Function to execute the build command
 execute_build() {
   display_message "Executing build command: $build_command"
-  gum spin --title "Building project..." -- $build_command
+  # gum spin --title "Building project..." -- $build_command
+  eval $build_command
   if [ $? -ne 0 ]; then
-    display_message "Build failed. Aborting deployment."
+    display_message "Build failed. Aborting deployment. $?"
     exit 1
   fi
 }
+
+copy_env() {
+  local build_output_path="$local_root/$build_output"
+  if gum confirm "Copy environment files to $build_output_path?"; then
+    local env_file=$(gum input --placeholder "Enter the environment file path after $local_root:")
+    local env_path="$local_root/$env_file"
+
+    if [ -f "$env_path" ]; then
+      display_message "Copying environment file to $build_output_path"
+      gum spin --title "Copying environment file..." -- cp $env_path $build_output_path
+      if [ $? -ne 0 ]; then
+        display_message "Failed to copy environment file. Aborting deployment."
+        exit 1
+      fi
+    else
+      display_message "No environment file found in the project root."
+    fi
+  else
+      display_message "Not copying environment file."
+  fi
+}
+
 
 # Function to deploy build output
 deploy_build() {
@@ -213,4 +218,5 @@ check_ssh_password_prompt() {
   prompt_for_config
   check_ssh_password_prompt
   execute_build
+  copy_env
   deploy_build
