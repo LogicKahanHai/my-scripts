@@ -1,6 +1,7 @@
 #!/bin/zsh
 
 CONFIG_FILE="deploy_config.json"
+SSH_TIMEOUT=10  # SSH connection timeout in seconds
 
 # Function to display a styled message
 display_message() {
@@ -28,6 +29,45 @@ confirm_project_root() {
   fi
 }
 
+
+rewrite_config() {
+  # Prompt for configuration details
+  hostname=$(gum input --placeholder "Enter Raspberry Pi hostname:")
+  username=$(gum input --placeholder "Enter SSH username:")
+  destination=$(gum input --placeholder "Enter destination folder on Raspberry Pi:")
+  build_command=$(gum input --placeholder "Enter the build command:")
+  build_output=$(gum input --placeholder "Enter the build output directory:")
+
+  # Save configuration to JSON file
+  jq --arg hostname "$hostname" \
+     --arg username "$username" \
+     --arg destination "$destination" \
+     --arg build_command "$build_command" \
+     --arg build_output "$build_output" \
+     '.hostname = $hostname | .username = $username | .destination = $destination | .build_command = $build_command | .build_output = $build_output' \
+     "$CONFIG_FILE" > tmp.$$.json && mv tmp.$$.json "$CONFIG_FILE"
+}
+
+
+rewrite_config() {
+  # Prompt for configuration details
+  hostname=$(gum input --placeholder "Enter Raspberry Pi hostname:")
+  username=$(gum input --placeholder "Enter SSH username:")
+  destination=$(gum input --placeholder "Enter destination folder on Raspberry Pi:")
+  build_command=$(gum input --placeholder "Enter the build command:")
+  build_output=$(gum input --placeholder "Enter the build output directory:")
+
+  # Save configuration to JSON file
+  jq --arg hostname "$hostname" \
+     --arg username "$username" \
+     --arg destination "$destination" \
+     --arg build_command "$build_command" \
+     --arg build_output "$build_output" \
+     '.hostname = $hostname | .username = $username | .destination = $destination | .build_command = $build_command | .build_output = $build_output' \
+     "$CONFIG_FILE" > tmp.$$.json && mv tmp.$$.json "$CONFIG_FILE"
+}
+
+
 # Function to prompt for configuration details
 prompt_for_config() {
   # Check if the configuration file exists
@@ -45,7 +85,7 @@ prompt_for_config() {
   [[ -z "$username" ]] && username=$(gum input --placeholder "Enter SSH username:")
   [[ -z "$destination" ]] && destination=$(gum input --placeholder "Enter destination folder on Raspberry Pi:")
   [[ -z "$build_command" ]] && build_command=$(gum input --placeholder "Enter the build command:")
-  [[ -z "$build_output" ]] && build_output=$(gum input --placeholder "Enter the build output directory (relative to the project root $local_root):")
+  [[ -z "$build_output" ]] && build_output=$(gum input --placeholder "Enter the build output directory:")
 
   # Save configuration to JSON file
   jq --arg hostname "$hostname" \
@@ -74,7 +114,7 @@ load_config() {
 # Function to execute the build command
 execute_build() {
   display_message "Executing build command: $build_command"
-  eval $build_command
+  gum spin --title "Building project..." -- $build_command
   if [ $? -ne 0 ]; then
     display_message "Build failed. Aborting deployment."
     exit 1
@@ -86,11 +126,13 @@ deploy_build() {
   display_message "Deploying build output to $username@$hostname:$destination"
 
   # Check if the destination directory exists on the remote server
-  if ssh "$username@$hostname" "[ ! -d '$destination' ]"; then
+  gum spin --title "Checking if destination directory exists..." -- ssh -o ConnectTimeout=$SSH_TIMEOUT "$username@$hostname" "[ ! -d '$destination' ]"
+  if [ $? -eq 0 ]; then
     # Notify the user and ask if they want to create it
     if gum confirm "The destination folder '$destination' does not exist on the remote server. Do you want to create it?"; then
       # Attempt to create the directory
-      if ssh "$username@$hostname" "mkdir -p '$destination'"; then
+      gum spin --title "Creating destination directory..." -- ssh -o ConnectTimeout=$SSH_TIMEOUT "$username@$hostname" "mkdir -p '$destination'"
+      if [ $? -eq 0 ]; then
         display_message "Successfully created the directory '$destination' on the remote server."
       else
         display_message "Failed to create the directory '$destination' on the remote server."
@@ -103,7 +145,7 @@ deploy_build() {
   fi
 
   # Proceed with rsync to deploy the build output
-  rsync -avz --delete "$local_root/$build_output/" "$username@$hostname:$destination"
+  gum spin --title "Deploying build output..." -- rsync -avz --delete "$local_root/$build_output/" "$username@$hostname:$destination"
   if [ $? -eq 0 ]; then
     display_message "Deployment successful."
   else
@@ -112,9 +154,63 @@ deploy_build() {
   fi
 }
 
-# Main script execution
-confirm_project_root
-prompt_for_config
-execute_build
-deploy_build
+# Function to set up SSH key-based authentication
+setup_ssh_key_auth() {
+    # Check if SSH keys already exist
+    if [ ! -f ~/.ssh/id_rsa ]; then
+    display_message "Generating SSH key pair..."
+    gum spin --title "Generating SSH key pair..." -- ssh-keygen -t rsa -b 4096 -N "" -f ~/.ssh/id_rsa
+    fi
 
+    # Copy the public key to the remote server
+    display_message "Copying public key to $username@$hostname..."
+    gum spin --title "Copying public key to remote server..." -- ssh-copy-id -o ConnectTimeout=$SSH_TIMEOUT "$username@$hostname"
+
+    # Test the SSH connection
+    display_message "Testing passwordless SSH connection..."
+    gum spin --title "Testing SSH connection..." -- ssh -o PasswordAuthentication=no -o ConnectTimeout=$SSH_TIMEOUT "$username@$hostname" "echo 'SSH connection successful'"
+    if [ $? -eq 0 ]; then
+        display_message "Passwordless SSH setup completed successfully."
+    else
+        display_message "Passwordless SSH setup failed. Please check your configuration."
+        exit 1
+    fi
+}
+
+  # Function to check if SSH requires a password
+check_ssh_password_prompt() {
+    # Attempt to SSH with a command that exits immediately
+    ssh -o BatchMode=yes -o ConnectTimeout=$SSH_TIMEOUT "$username@$hostname" "exit" 2>ssh_error.log
+    ssh_exit_code=$?
+
+    # Check for hostname resolution error
+    if grep -q "Could not resolve hostname" ssh_error.log; then
+        display_message "Error: Could not resolve hostname '$hostname'."
+        if gum confirm "Do you want to update the server details?"; then
+            rewrite_config
+            check_ssh_password_prompt  # Retry with updated details
+        else
+            display_message "Exiting the program."
+            exit 1
+        fi
+    elif [ $ssh_exit_code -ne 0 ]; then
+        if gum confirm "SSH to $username@$hostname requires a password. Do you want to set up passwordless SSH access?"; then
+            setup_ssh_key_auth
+        else
+            display_message "Proceeding without setting up passwordless SSH access."
+        fi
+    else
+        display_message "Passwordless SSH access is already configured."
+    fi
+
+    # Clean up
+    rm -f ssh_error.log
+}
+
+  # Main script execution
+  load_config
+  confirm_project_root
+  prompt_for_config
+  check_ssh_password_prompt
+  execute_build
+  deploy_build
