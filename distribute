@@ -123,6 +123,74 @@ copy_env() {
   else
       display_message "Not copying environment file."
   fi
+
+  if [ -f "$build_output_path/.env" ]; then
+    display_message "Environment file copied successfully."
+  else
+    display_message "Environment file not found in the build output directory."
+  fi
+}
+
+# Function to ask the user to copy any other important files
+copy_files() {
+  local build_output_path="$local_root/$build_output"
+  # First check if the list of files exist in deploy_config.json
+  if [[ -f "deploy_config.json" ]]; then
+    files=$(jq -r '.files[]' deploy_config.json)
+    if [[ -n "$files" ]]; then
+      display_message "Copying files listed in deploy_config.json to the build output directory."
+      for file in $files; do
+        if [ -f "$local_root/$file" ]; then
+          display_message "Copying file '$file' to $build_output_path"
+          gum spin --title "Copying file $file..." -- cp "$local_root/$file" "$build_output_path"
+          if [ $? -ne 0 ]; then
+            display_message "Failed to copy file '$file'."
+          fi
+        else
+          display_message "File '$file' not found in the project root."
+        fi
+      done
+    fi
+  fi
+
+
+  if gum confirm "Do you want to copy any other important files to the build output directory?"; then
+    local build_output_path="$local_root/$build_output"
+    local files=()
+    display_message "Enter file paths one by one (press enter after each file, 'q' to finish):"
+    while true; do
+      file=$(gum input --placeholder "Enter file path after $local_root")
+      if [[ "$file" == "q" ]]; then
+        break
+      elif [[ -n "$file" ]]; then
+        files+=("$file")
+      else
+        gum style --foreground 9 "File path cannot be empty. Please enter a valid file path."
+      fi
+    done
+
+    # Add the files list to the JSON configuration 
+    json_array=$(printf '%s\n' "${files[@]}" | jq -R . | jq -s .)
+    jq --argjson new_files "$json_array" '.files += $new_files' deploy_config.json > tmp.json && mv tmp.json deploy_config.json
+
+    for file in "${files[@]}"; do
+      if [ -f "$build_output_path/$file" ]; then
+        display_message "File '$file' already exists in the build output directory."
+        continue
+      fi
+      if [ -f "$local_root/$file" ]; then
+        display_message "Copying file '$file' to $build_output_path"
+        gum spin --title "Copying file $file..." -- cp "$local_root/$file" "$build_output_path"
+        if [ $? -ne 0 ]; then
+          display_message "Failed to copy file '$file'."
+        fi
+      else
+        display_message "File '$file' not found in the project root."
+      fi
+    done
+  else
+    display_message "No other files to copy."
+  fi
 }
 
 
@@ -146,6 +214,19 @@ deploy_build() {
     else
       display_message "Deployment aborted by the user."
       exit 1
+    fi
+  else
+    display_message "Destination directory '$destination' already exists on the remote server."
+    if gum confirm "Do you want to delete the contents of the destination directory before deploying?"; then
+      gum spin --title "Deleting contents of destination directory..." -- ssh -o ConnectTimeout=$SSH_TIMEOUT "$username@$hostname" "rm -rf '$destination/*'"
+      if [ $? -eq 0 ]; then
+        display_message "Successfully deleted the contents of the directory '$destination' on the remote server."
+      else
+        display_message "Failed to delete the contents of the directory '$destination' on the remote server."
+        exit 1
+      fi
+    else
+      display_message "Proceeding with deployment without deleting the contents of the destination directory."
     fi
   fi
 
@@ -212,11 +293,78 @@ check_ssh_password_prompt() {
     rm -f ssh_error.log
 }
 
-  # Main script execution
-  load_config
-  confirm_project_root
-  prompt_for_config
-  check_ssh_password_prompt
-  execute_build
-  copy_env
-  deploy_build
+collect_post_deploy_commands() {
+  local post_commands=()
+  display_message "Enter post-deployment commands one by one (press enter after each command).
+  They will be executed on the remote server in the same order
+      (enter command as 'q' to finish): "
+  while true; do
+    cmd=$(gum input --placeholder "Enter command")
+    if [[ "$cmd" == "q" ]]; then
+      break
+    elif [[ -n "$cmd" ]]; then
+      post_commands+=("$cmd")
+    else
+        gum style --foreground 9 "Command cannot be empty. Please enter a valid command."
+    fi
+  done
+
+  save_commands_to_json "${post_commands[@]}"
+}
+
+save_commands_to_json() {
+  local commands=("$@")
+  json_array=$(printf '%s\n' "${commands[@]}" | jq -R . | jq -s .)
+  # Append commands to the JSON file
+  jq --argjson new_commands "$json_array" '.post_deploy_commands += $new_commands' deploy_config.json > tmp.json && mv tmp.json deploy_config.json
+
+
+  display_message "Post-deployment commands saved to deploy_config.json."
+}
+
+execute_post_deploy_commands() {
+  if [[ -f "deploy_config.json" ]]; then
+    post_commands=$(jq -r '.post_deploy_commands[] // empty' $CONFIG_FILE)
+    if [[ -z "$post_commands" ]]; then
+        if gum confirm "No post-deployment commands found in deploy_config.json. Do you want to create and execute them now?"; then
+          collect_post_deploy_commands
+          execute_post_deploy_commands
+        else
+            gum style --foreground 9 "No post-deployment commands found in deploy_config.json. Skipping execution."
+        fi
+    else
+        if gum confirm "Do you want to execute post-deployment commands?"; then
+          display_message "Executing post-deployment commands..."
+          for cmd in $post_commands; do
+            gum spin --title "Executing command: $cmd" -- ssh -o ConnectTimeout=$SSH_TIMEOUT "$username@$hostname" "$cmd"
+            if [ $? -ne 0 ]; then
+              display_message "Failed to execute command: $cmd"
+              exit 1
+            fi
+            display_message "Command: $cmd executed successfully."
+          done
+        else
+            gum style --foreground 9 "Skipping execution of post-deployment commands."
+        fi
+    fi
+  else
+      if gum confirm "No post-deployment commands found in deploy_config.json. Do you want to create and execute them now?"; then
+        collect_post_deploy_commands
+        execute_post_deploy_commands
+      else
+          gum style --foreground 9 "No post-deployment commands found in deploy_config.json. Skipping execution."
+      fi
+  fi
+}
+
+
+# Main script execution
+load_config
+confirm_project_root
+prompt_for_config
+check_ssh_password_prompt
+execute_build
+copy_env
+copy_files
+deploy_build
+execute_post_deploy_commands
